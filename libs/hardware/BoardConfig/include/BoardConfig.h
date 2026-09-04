@@ -75,14 +75,17 @@
 #ifndef FREEINK_DEVICE_ONEPAGE
 #define FREEINK_DEVICE_ONEPAGE 0
 #endif
+#ifndef FREEINK_DEVICE_ITALIC_POCKET
+#define FREEINK_DEVICE_ITALIC_POCKET 0
+#endif
 
 // --- 2) Coherence: exactly one MCU family, at least one device ---------------
 #if !(FREEINK_DEVICE_X4 || FREEINK_DEVICE_X3 || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_X4CLASSIC || FREEINK_DEVICE_M5 || \
       FREEINK_DEVICE_MURPHY || FREEINK_DEVICE_DELINK || FREEINK_DEVICE_LILYGO || FREEINK_DEVICE_M5PAPER ||               \
       FREEINK_DEVICE_STICKY || FREEINK_DEVICE_PAPERMONO || FREEINK_DEVICE_PAPERS3 || FREEINK_DEVICE_MURPHY_M4 ||         \
-      FREEINK_DEVICE_EEGO_A4 || FREEINK_DEVICE_ONEPAGE)
+      FREEINK_DEVICE_EEGO_A4 || FREEINK_DEVICE_ONEPAGE || FREEINK_DEVICE_ITALIC_POCKET)
 #error \
-    "FreeInk: no device selected. Pass at least one -DFREEINK_DEVICE_<NAME> (X4, X3, X4PRO, X4CLASSIC, M5, MURPHY, DELINK, LILYGO, M5PAPER, STICKY, PAPERMONO, PAPERS3, MURPHY_M4, EEGO_A4, ONEPAGE) in your build env — see platformio.sample.ini."
+    "FreeInk: no device selected. Pass at least one -DFREEINK_DEVICE_<NAME> (X4, X3, X4PRO, X4CLASSIC, M5, MURPHY, DELINK, LILYGO, M5PAPER, STICKY, PAPERMONO, PAPERS3, MURPHY_M4, EEGO_A4, ONEPAGE, ITALIC_POCKET) in your build env — see platformio.sample.ini."
 #endif
 // Each device belongs to one MCU family; a binary targets exactly one. X3/X4 are
 // ESP32-C3; M5 PaperColor/Murphy/de-link/LilyGo are ESP32-S3; M5Paper v1.1 is the
@@ -95,9 +98,12 @@
    FREEINK_DEVICE_STICKY || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_X4CLASSIC || FREEINK_DEVICE_PAPERMONO ||  \
    FREEINK_DEVICE_PAPERS3 || FREEINK_DEVICE_MURPHY_M4 || FREEINK_DEVICE_EEGO_A4)
 #define FREEINK_MCU_ESP32 (FREEINK_DEVICE_M5PAPER)
-#if (FREEINK_MCU_C3 + FREEINK_MCU_C61 + FREEINK_MCU_S3 + FREEINK_MCU_ESP32) != 1
+// JieLi AC791N (wl82): Italic Pocket. Not an ESP32 — reached through the consumer's
+// Arduino/ESP-IDF compatibility layer (see the italic-pocket repo, port/jieli).
+#define FREEINK_MCU_JIELI (FREEINK_DEVICE_ITALIC_POCKET)
+#if (FREEINK_MCU_C3 + FREEINK_MCU_C61 + FREEINK_MCU_S3 + FREEINK_MCU_ESP32 + FREEINK_MCU_JIELI) != 1
 #error \
-    "FreeInk: all selected devices must share one MCU family — ESP32-C3 (X3/X4), ESP32-C61 (OnePage), ESP32-S3 (M5/Murphy/de-link/LilyGo/Sticky/X4Pro), or ESP32 (M5Paper). Build one binary per family."
+    "FreeInk: all selected devices must share one MCU family — ESP32-C3 (X3/X4), ESP32-C61 (OnePage), ESP32-S3 (M5/Murphy/de-link/LilyGo/Sticky/X4Pro), ESP32 (M5Paper), or JieLi AC791N (Italic Pocket). Build one binary per family."
 #endif
 
 // --- 3) Derive panel drivers from the device set -----------------------------
@@ -131,7 +137,7 @@
 // probe (0x70 VER readback; NVS hw_calib/screenType is diagnostics-only) and the
 // matching driver is selected before display begin(). Link each driver wherever
 // a batch might carry it.
-#if FREEINK_DEVICE_X3
+#if FREEINK_DEVICE_X3 || FREEINK_DEVICE_ITALIC_POCKET
 #define FREEINK_DRIVER_UC8279 1
 #else
 #define FREEINK_DRIVER_UC8279 0
@@ -381,6 +387,8 @@ enum class Board : uint8_t {
   M5PaperS3,  // ESP32-S3 sibling of M5Paper v1.1: same ED047TC1 glass, no IT8951 — raw parallel via LovyanGFX
   EegoA4,     // EEGO Reader A4: ESP32-S3, UC8279C 768x552 SPI panel, GSLX680 touch, PCF8563 RTC
   OnePage,    // OnePage: ESP32-C61, SSD1677 800x480 SPI panel, 4-key ADC ladder + 3 side keys
+  ItalicPocket,  // Italic Pocket (Kaiconn AIBOOK S3 hardware): JieLi AC791N, UC8279 792x528 SPI panel,
+                 // Hynitron CST836U touch, SD NAND storage, power key + 2-key ADC ladder
 };
 
 // How the board reports button presses.
@@ -418,7 +426,7 @@ enum class DisplayController : uint8_t {
 };
 
 // Optional capacitive touch controller.
-enum class TouchController : uint8_t { None, Chsc6x, Gt911, Ft5x06, Ft6336u, Gslx680 };
+enum class TouchController : uint8_t { None, Chsc6x, Gt911, Ft5x06, Ft6336u, Gslx680, Cst8xx };
 
 // Optional audio output path. Murphy M3 ships an ES8388-compatible stereo
 // codec (I2S slave, control over the shared touch I2C bus) — the contract was
@@ -945,6 +953,39 @@ constexpr BoardProfile XTEINK_X3_UC8279 = {
     {20, 0, 400000, 0x55, 0},
     NO_MIC,
     {20, 0, 400000, 0x68, 0, 0x6B, 0, RtcType::Ds3231, ImuType::Qmi8658}};
+
+// --- Italic Pocket — JieLi AC791N (wl82), UC8279 792x528 SPI panel, CST836U touch
+// Pins are JieLi IO_PORTx_nn numbers (16 per port: PA=0.., PB=16.., PC=32.., PH=112..),
+// recovered from the OEM firmware (Kaiconn AIBOOK S3, PKS3-101 V1.1.22): the
+// board platform structs (pdata, spi2_data, sd0_data, iokey_data, adkey_data) and
+// the EPD/touch driver disassembly. See docs/device.md in the italic-pocket repo.
+constexpr BoardProfile ITALIC_POCKET = {
+    Board::ItalicPocket,
+    "italic_pocket",
+    InputStyle::DigitalButtons,
+    DisplayController::UC8279,
+    792,
+    528,
+    {3, 4, 8, 7, 6, 5, PIN_UNASSIGNED},  // sclk PA03, mosi PA04, cs PA08, dc PA07, rst PA06, busy PA05 (low = busy)
+    18000000,                            // OEM runs SPI2 at 18 MHz, mode 0
+    {PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, false, 0},  // no SPI SD
+    {PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, 17, false},
+    // ^ power key PB01 (active-low, also the long-press hardware reset). Two more keys sit
+    //   on an ADC ladder on PA10 (ADC ch 2, values 4/5 in the OEM firmware) — mapped by the
+    //   platform layer's key driver, not by InputManager's ESP ADC path.
+    PIN_UNASSIGNED,  // batteryAdc: the SoC's internal VBAT channel, read by the platform layer
+    PIN_UNASSIGNED,  // batteryChargeStatus: charger events come from the SoC power driver
+    1.0f,
+    PIN_UNASSIGNED,
+    {TouchController::Cst8xx, 113, 112, 37, 38, 0x15, 0, 527, 0, 791, false, 0, true, false},
+    // ^ sda PH01, scl PH00, irq PC05 (active-low, pull-up), rst PC06, 7-bit addr 0x15
+    NO_FRONTLIGHT,  // no front light on this board
+    NO_AUDIO,       // audio is the SoC's own codec, driven by the platform layer
+    NO_LEDS,
+    NO_FLIP,
+    {22, 23, 21, 20, 19, 18, 4},  // SD NAND on SDMMC0 port A: clk PB06, cmd PB07, d0 PB05, d1 PB04, d2 PB03, d3 PB02
+    NO_GAUGE,
+    NO_MIC};
 
 // --- M5Stack PaperColor — ESP32-S3, ED2208 color panel, M5PM1 PMIC -----------
 constexpr BoardProfile M5STACK_PAPER_COLOR = {Board::M5StackPaperColor,
@@ -1753,6 +1794,8 @@ constexpr uint32_t panelBytes(const BoardProfile& p) {
   return static_cast<uint32_t>(p.displayWidth / 8) * p.displayHeight;
 }
 constexpr uint32_t MAX_FRAMEBUFFER_BYTES = cmax(
+    FREEINK_DEVICE_ITALIC_POCKET ? panelBytes(ITALIC_POCKET) : 0u,
+    cmax(
     cmax(cmax(FREEINK_DEVICE_X4 ? panelBytes(XTEINK_X4) : 0u, FREEINK_DEVICE_X3 ? panelBytes(XTEINK_X3) : 0u),
          cmax(FREEINK_DEVICE_M5 ? panelBytes(M5STACK_PAPER_COLOR) : 0u,
               FREEINK_DEVICE_MURPHY ? panelBytes(MURPHY_M3) : 0u)),
@@ -1766,12 +1809,14 @@ constexpr uint32_t MAX_FRAMEBUFFER_BYTES = cmax(
               cmax(cmax(FREEINK_DEVICE_PAPERS3 ? panelBytes(M5PAPER_S3) : 0u,
                         FREEINK_DEVICE_MURPHY_M4 ? panelBytes(MURPHY_M4) : 0u),
                    cmax(FREEINK_DEVICE_EEGO_A4 ? panelBytes(EEGO_A4) : 0u,
-                        FREEINK_DEVICE_ONEPAGE ? panelBytes(ONEPAGE) : 0u)))));
+                        FREEINK_DEVICE_ONEPAGE ? panelBytes(ONEPAGE) : 0u))))));
 
 // Compile-time default device — the profile ACTIVE starts as. With a single
 // device in the build this is the only device; with several same-MCU devices it
 // is the boot default until the consumer calls selectDevice().
-#if FREEINK_DEVICE_ONEPAGE
+#if FREEINK_DEVICE_ITALIC_POCKET
+constexpr BoardProfile DEFAULT_DEVICE = ITALIC_POCKET;
+#elif FREEINK_DEVICE_ONEPAGE
 constexpr BoardProfile DEFAULT_DEVICE = ONEPAGE;
 #elif FREEINK_DEVICE_PAPERMONO
 constexpr BoardProfile DEFAULT_DEVICE = PAPER_MONO;
@@ -1892,6 +1937,11 @@ inline bool selectDevice(Board which) {
 #if FREEINK_DEVICE_ONEPAGE
     case Board::OnePage:
       ACTIVE = ONEPAGE;
+      break;
+#endif
+#if FREEINK_DEVICE_ITALIC_POCKET
+    case Board::ItalicPocket:
+      ACTIVE = ITALIC_POCKET;
       break;
 #endif
     default:
